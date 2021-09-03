@@ -207,6 +207,117 @@ reduce 大致分为copy/sort/reduce 三个阶段，重点在前两个阶段。co
 3. 合并排序： 把分散的数据合并成一个大数据后，还会再对合并的数据排序。
 4. 对排序后的键值对调用reduce方法，键相等的键值对调用一次reduce方法，每次调用会产生零个或者多个键值对，最后把这些键值对写到HDFS文件中。
 
+#### 12. 请说一下MR中的shuffle阶段
+
+Shuffle阶段分为四个步骤：依次为：
+
+分区、排序、规约、分组
+
+其中前三个步骤在map阶段完成，最后一个步骤在reduce阶段完成。
+
+shuffle是MapReduce的核心，它分布在Mapreduce的map阶段和reduce阶段。一般把从map产生输开始到Reduce取得数据作为输入之前的过程称为shuffle。
+
+1. Collect阶段： 将MapTask的结果输出到默认大小的100M的环形缓冲区，保存的是key/value，parition分区信息等。
+
+2. split阶段：当内存中的数据量达到一定的阀值的时候，就会将数据写到本地磁盘，再将数据写入到磁盘之前需要对数据进行一次排序操作，如果配置了combiner，还会将有相同分区号和key的数据进行排序。
+
+3. Merge阶段：把所有溢出的临时文件进行一次合并操作，以确保一个MapTask最终只产生一个中间数据文件。
+
+4. copy阶段：ReduceTask启动Fetcher线程到已经完成maptask的节点复制一份属于自己的数据，这些数据默认会保存在内存的缓冲区中，当内存的缓冲区达到一定的阀值，就会将数据写到磁盘中。
+
+5. Merge阶段：在ReduceTask远程复制数据的同时，会在后台开启两个线程对内存到本地的数据文件进行合并操作。
+
+6. Sort阶段：在对数据进行合并的同时，会进行排序操作，由于MapTask 阶段已经对数据进行局部的排序，Reducetask只需保证Copy的数据的最终整体有效性即可。
+
+   注：shuffle中缓冲区大小会影响到mapreduce程序的执行效率，原则上说，缓冲区越大，磁盘的io次数也少，执行速度越快。
+
+   缓冲区的大小可以通过参数调整，参数：mapreduce.task.io.sort.mb 默认为100M。
+
+#### 13. shuffle阶段的数据压缩机制了解吗？
+
+在shuffle阶段中，可以看到数据的大量拷贝，从map阶段输出的数据，都要通过网络拷贝，发送到reduce阶段，这个一个过程中，涉及到大量的网络IO,如果数据能够进行压缩，那么数据的发送量就会少的多。
+
+hadoop当中支持压缩算法：
+
+gzip、bzip2、LZO、Lz4、snappy,这几种压缩算法综合压缩和压缩速率，谷歌中的snappy是最优的，一般都选择snappy压缩。
+
+#### 14. 在写MR时，什么情况下可以使用规约？
+
+规约(combiner)是不能够影响任务的运行结果的，局部汇总，适用于求和类，不适用于求平均值，如果reduce的输入参数类型和输出类型参数类型是一样的，则规约的类可以使用reduce类，只需要在驱动类中指明规约的类即可。
+
+#### 15. yarn集群的架构和工作原理知道多少？
+
+yarn 的基本设计思想是将MapReduceV1中JobTracker拆分为两个独立的服务：
+
+ResourceManager 和 ApplicationMaster.
+
+ResouceManager 负责整个系统的资源管理和分配，ApplicationMaster负责单个应用程序的管理。
+
+1. ResouceManager:
+
+   RM是一个全局的资源管理器，负责整个系统的资源管理和分配，它主要由两个部分组成：调度器（Scheduler）和应用程序管理器（Application Manager）。调度器根据容量、队列等限制条件，将系统中的资源分配给正在运行的应用程序，在保证容量、公平性和服务等级的前提下，优化了集群资源利用率，让所有的资源都被充分利用应用程序管理器负责整个系统中的所有的应用程序，包括应用程序的提交、与调度器协商资源启动ApplicationMaster、监控ApplictionMaster运行状态并在失败的时候重启它。
+
+2. ApplictionMaster：
+
+   用户提交的一个应用程序会对一个ApplicationMaster,他的主要功能有：
+
+   与RM调度器协商获得资源，资源以container表示。
+
+   将得到的任务进行一部分配给内部任务。
+
+   与NM通信以启动、停止任务。
+
+   监控所有的内部任务状态，并在任务运行失败的时候重新为任务申请资源以重启任务。
+
+3. NodeManger:
+
+   NodeManger 是每个节点上的资源和任务管理器，一方面，他会定期的向RM汇报本地点上的资源使用情况和各个Container的运行状态；l另一方面，它接收并处理来自AM的Container的启动和停止请求。
+
+4. Container:
+
+   Container是Yarn中资源抽象，封装了各种资源，一个应用程序会分配一个Container，这个应用程序只能使用这个Container中描述的资源。
+
+   不同于mapReduceV1中槽位slot的资源封装，Container是一个动态资源的划分单位，更能充分利用资源。
+
+#### 16. yarn的任务提交流程是怎样的？
+
+当JobClient向yarn提交一个应用程序后，yarn将分成两个阶段运行这个应用程序：一是启动applicationmaster;第二个阶段是由ApplictionMaster创建程序，为它申请资源，监控运行知道结束。
+
+1. 用户向yarn提交一个应用程序，并指定Application程序、启动ApplicationMaster的命令、用于程序。
+2. RM为这个应用程序分配第一个Container，并与之对应的NM通讯，要求他在这个Container中启动应用程序ApplicationMaster。
+3. ApplicationMaster向RM注册，然后拆分为内部各个子任务，为各个内部任务申请资源，并监控这些任务的运行，知道结束。
+4. AM采用轮询的方式向RM申请和领取资源
+5. RM申请到资源后，便与之对应的NM通讯，要求NM启动任务。
+6. NodeManager为任务设置号运行环境，将任务启动命令写到一个脚本中，并通过运行这个脚本启动任务。
+7. 各个任务向AM汇报自己的状态和进度，以便任务失败时可以重启任务。
+8. 应用程序完成之后，applicationMaster向ResoureManager注销关闭自己。
+
+#### 17. yarn资源调度三种模型了解吗？
+
+在yarn有三种调度器可以选择：FIFO scheduler、Capacity Scheduler、Fair scheduler。
+
+apache版本的hadoop默认使用的是capacity调度方式，CDH版本默认使用的是fair scheduler调度方式。
+
+FIFO Scheduler（先来先服务）
+
+FIFO Scheduler把应用按提交的顺序排成一个队列，这是一个先进先出的队列，在进行资源分配的时候，先给队列中最头上的应用进行分配资源，待最头上的应用需求满足后，在给下一个分配，以此类推。
+
+FIFO Scheduler是最简单的调度器，也不需要任何配置，但是它并不适用共享集群。大的应用可能会占用所有的集群资源，这就导致其他应用被阻塞，比如有一个大任务执行，占了全部的资源，再提交一个小任务，则此小任务一直被阻塞。
+
+Capacity Scheduler （能力调度器）：
+
+对于Capacity 调度器，有一个专门的队列用于运行小任务，但是为小任务专门设置一个队列会预先占用一定的集群资源，这就导致大任务的执行时间会落后于FIFO调度器时间。
+
+Fair scheduler （公平调度器）：
+
+在Fair调度器中，我们不需要预先占用一定的系统资源，Fair调度器会为所有运行的Job动态的调整系统资源。
+
+比如：当第一个Job提交的时候，只有一个job在运行，此时它获取了所有的集群资源，当第二小任务提交后，Fair 调度器会分配一半资源给这个小任务，让这两个任务公平的共享集群资源。
+
+需要注意的是，在Fair的调度器中，第二个任务提交到资源会有一定的延迟，因为它需要等待第一个任务释放占用的Container。小任务执行完成之后也会释放自己占用的资源。大任务又获得了全部的系统资源。最终的效果的就是Fair调度器得到了高的资源利用率又能保证小任务的及时完成。
+
+
+
 
 
 
