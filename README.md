@@ -442,7 +442,190 @@ sort by  不是全局排序，其数据进入到reducer前完成排序。因此�
 
 大表对小表：设置自动识别小表，将小表放入到内存中去执行。
 
+### 三、 Spark
 
+#### 1. 通常来说，Spark 与MapReduce 相比，Spark 运行效率更高，请说明效率来源于Spark内置那些机制？
+
+#### 2. Hadoop 和Spark 使用场景？
+
+1. Hadoop/MapReduce 和 Spark 最适合的都是做离线型的数据分析，但Hadoop特别适合是单次分析数据量很大的情景，而Spark则适用于数据量不是很大的情景。
+2. 一般情况下，对于中小互联网公司和企业级的大数据应用而言，单次的分析的数量都不会很大，因此可以优先考虑Spark。
+3. 业务通常认为Spark更适合用于机器学习之类的迭代应用，80GB的压缩数据，（解压后超过200GB）,10个节点的数据集群规模，跑类似“sum+group-by”的应用，MapReduce花了5分钟，而spark只需要2分钟。
+
+#### 3. Spark 如何保证宕机迅速恢复？
+
+1. 适当增加spark standy master
+2. 编写shell脚本，定期检测master状态，出现宕机后对master进行重启操作
+
+#### 4. hadoop 和 spark的相同点和不同点
+
+Hadoop 底层使用MapReduce计算架构，只有map和reduce 两种操作，表达能力比较欠缺，而且在MR过程中会重复的读写HDFS，造成大量的磁盘IO，读写操作，所以适合高延时环境下的批处理计算应用。
+
+spark是基于内存的分布式计算架构，提供更加丰富的数据集操作类型，主要分成转化操作和行动操作，包括map、reduce、fliter、flatmap、groupbyKey、reducebykey、union、 join等，数据分析更加快速，所以适合低延时环境下的计算。
+
+spark与hadoop最大的区别在与迭代式计算模型。基于mapreduce框架的hadoop主要分为map和reduce两个阶段，两个节点完了就结束了，所以在一个job里面，处理能力有限；spark计算模型是基于内存的迭代式计算模型，可以分为n个阶段，根据用户编写的RDD算子和程序，在处理完成一个阶段后可以继续往下处理更多个阶段，而不只是两个阶段。所以spark相较于mapreduce，计算模型更加灵活，可以提供更强大的功能。
+
+但是，spark也有劣势，由于spark基于内存计算，虽然开发容易，但是真正面对大数据的时候，在没有惊醒调优的情况下，可能会出现各种各样的问题，比如OOM内存溢出，导致Spark程序可能无法运行起来，而mapreduce虽然运行缓慢，但是至少可以运行完。
+
+#### 5. RDD 持久化原理？
+
+Spark 非常重要的一点功能就是可以将RDD持久化内存中。
+
+调用cache()和persist() 方法即可。
+
+chache / persist 的区别在于chache是persist的一种简化的方式，chache的底层就是在调用persist的无参版本perist(MEMORY_ONLY),将数据持久化到内存中。
+
+如果需要重内存中清楚缓存，可以使用unpersist()方法，RDD持久化可以手动选择不同的策略。在调用persists时传入对应的storageLevel即可。
+
+#### 6. checkpoint检查点机制？
+
+应用场景：当Spark应用程序特别复杂，从初始化的RDD开始最后整个应用程序完成很多步骤，而且整个应用的运行时间特别长，这种情况下就比较适合使用checkpoint功能。
+
+原因：对于特别复杂的Spark应用，会出现某个反复使用的RDD,即使之前持久化过了但是由于节点故障导致数据丢失，没有容错机制，所以需要重新计算一次数据。
+
+checkpoint首先会调用SparkContext的setPointDIR()的方法，设置一个容错的文件系统的目录，比如HDFS,然后对RDD调用checkpoint方法。之后的RDD所处的Job运行结束之后，会启动单独的job，来将checkpoint过的RDD数据写入之前设置的文件系统，进行高可用、容错的类持久化操作。
+
+检查点机制是我们在SparkStreaming中用户保障容错性的主要机制，它可以使spark streaming阶段型的把应用数据村粗到诸如HDFS等可靠的存储系统中，已供恢复时使用。具体来说基于一下两个目的服务。
+
+* 控制发生失败时需要重算的状态数。SparkSteaming可以通过转化图的谱系图来重算状态，检查点机制则可以控制需要在转化图中回溯多远。
+* 提供驱动器程序容错。如果流计算应用中的驱动程序崩溃了，你可以重启驱动器程序并让驱动器程序重检查点和恢复，这样spark streaming就可以读取之前运行的程序处理数据的进度，并从哪里继续。
+
+#### 7. checkpoint 和持久化机制的区别？
+
+最主要的区别在于持久化只是将数据保存到blockmanager中，但是RDD的lineage（血缘关系，依赖关系）是不会改变的。但是checkpoint 执行完成之后，rdd已经没有之前依赖rdd了，而只有一个强行为设置的checkpointRDD，checkpoint之后rdd的lineage就改变了。
+
+持久化的数据丢失的可能属性更大，因为节点的故障会导致磁盘、内存数据丢失i。但是checkopint的数据通常保存到高可用的文件系统中，比如HDFS之中，所以数据丢失的可能性会比较低。
+
+#### 8. RDD机制理解吗？
+
+rdd分布式弹性的数据集，简单的理解成一种数据结构，是Spark框架上的通用货币，所有算子都是基于RDD来执行的。不同的场景会有不同的RDD实现类，但是都可以进行一个互相转换。rdd执行过程中会形成dag图,然后会形成lineage保证的容错性。从物理的角度来看，rdd存储的是block和node之间的映射。
+
+RDD的spark提供可行抽象，全称为弹性的分布式数据集。
+
+RDD在逻辑上是一个HDFS文件，在抽象上的一种元素的集合，包含了数据。但是被分区的，分为多个分区，每个分区分布在集群中的不同的节点上。从而让RDD中的数据可以被并行操作。
+
+比如有个RDD有90w数据，3个partiion，则每个分区上有30w数据。RDD通过hadoop上的文件，即HDFS或者hive表来创建，还可以通过应用中的程序集合来创建；RDD最重要的特性是容错性，可以自动从节点是中恢复过来。即如果某个节点上 RDD patition因为节点故障导致数据丢失，那么RDD可以通过自己的数据来源重新计算该partition,这一切对使用者都是透明的。
+
+RDD的数据默认存放在内存中，但是当内存资源不足的时候，spark会自动将RDD数据写入到磁盘。比如某个节点内存只能处理20w数据，那么这歌20w数据就会放入到内存计算,剩下的10w就会按到磁盘中。RDD的弹性体现在RDD上会自动进行内存和磁盘之间的权衡和切换机制。
+
+#### 9. spark Streaming以及基本工作原理？
+
+sparK streaimg 是spark core API的一种拓展，可以用于惊醒大规模、高吞吐、容错的实时数据流的处理。
+
+它支持从多种数据源读取数据，比如kafka、flume、 twitter、TCP socket,并且能够使用算子比如map、reduce、join和window等来处理数据。处理后的数据可以保存到文件系统、数据库等存储。
+
+spark streaming内部的基本工作原理是：接受实时数据流，然后将数据拆分成batch，比如每收集一秒的数据封装成一个batch，然虎将每个batch数据交给spark的计算引擎进行一个处理，最后会生成一个结果数据流，其中数据也是一个一个batch组成的。
+
+#### 10. DStream 以及基本工作原理？
+
+DStream 是spark Streaming 提供的一种高级抽象，代表的一个持续不断的数据流。
+
+DStream 可以通过输入数据源来创建，比如kafka、flume等，也可以通诺其他的Dstream高阶的函数来创建，比如map、reduce、join、window等。
+
+Dstream内部其实不断产生RDD,每个RDD包含了一个时间段的数据。
+
+Spark streaming一定是有一个输入的Dstream接收数据，按照时间划分成一个一个的batch，并转化成为一个RDD,RDD的数据是分散在各个子节点的partion中。
+
+#### 11. spark有那些组件？
+
+1. master: 管理集群、节点、不参与计算
+2. woker: 计算节点，进程本身不参与计算，和master汇报。
+3. Driver： 运程序的main方法，创建sparkcontext对象
+4. spark cotext:控制整个application的声明周期，包括dagsheduler和task scheduler等组件。
+5. client： 用户提交程序的入口。
+
+
+
+#### 12. spark工作机制？
+
+用户在client 端提交作业之后，会由Driver运行main方法，创建sparkcontext上下文，执行Rdd算子，形成一个dag图输入dagscheduler，按照Rdd之间的依赖关系划分stage输入task scheduler.tasksceduler会将stage划分成taskset 分发到各个节点executor中执行。
+
+#### 13. 说一下宽依赖和窄依赖
+
+宽依赖：
+
+本质上是一个shuffle，父RDD的每一个partition中的数据，都可能会传输一部分到下一个子RDD的每一个partition中，此时会出现fuRDD和子RDD的partitio之间测交互错综复杂关系，这种关系就是是两个RDD的宽依赖。
+
+窄依赖：
+
+父RDD和子RDD的partion之间的对应关系是一对一的。
+
+#### 14. spark 主备切换机制原理知道吗？
+
+Master实际上是可以配置两个，spark原生的standalone模式是支持master主备切换的。当active master节点挂掉之后，我们可以将standby Master切换为active master。
+
+Spark Master 主备切换可以基于两种机制，一种是基于文件系统的，一种是基于
+ZooKeeper 的。
+基于文件系统的主备切换机制，需要在 Active Master 挂掉之后手动切换到
+Standby Master 上；
+而基于 Zookeeper 的主备切换机制，可以实现自动切换 Master。
+
+#### 15. spark 解决了hadoop的那些问题？
+
+1. MR: 抽象层次低，需要使用手写代码来完成程序的编写，使用上难以上手；
+
+   spark: spark 才用RDD的计算模型，简单容易上手
+
+2. MR: 只提供map和reduce两个操作，表达能力比较欠缺。
+
+   spark：采用更加丰富的算子模型，包括map、flatlmap、groupbykey、reducebykey
+
+3. MR: 中间结果存在hdfs中，
+
+   spark： spark中间结果一般都存在内存中，只有当内存不够了，才会存到本地磁盘，而不是hdfs;
+
+4. MR: 一个job只能包含map和reduce两个阶段，复杂的任务需要包含很多个job，这些job之间的管理需要开发者自己进行管理。
+
+   spark:一个job可以包含多个转换操作，在调度时可以生成多个stage,而且如果多个map操作的分区不变，是可以放到一个task里面去执行。
+
+5. MR: 只有等到所有的map task 执行完毕知乎才能执行redcuetask；
+
+   spark:spark 中的分区相同的转换构流水线在一个task中执行，分区不同的需要进行shuffle操作，划分为不同的stage需要等待前面的stage执行完成之后才能拿执行。
+
+6. MR: 只适合batch批处理，时延搞，对于交互式处理和实时处理支持不够
+
+   spark: spark streaming 可以间流拆成时间间隔的batch进行处理，实时计算。
+
+
+
+#### 16. 数据倾斜的产生和解决办法？
+
+数据倾斜以为某一个或者某几个的partition的数据特别大，导致这几个partition上的计算需要耗时相当长时间。
+
+在spark中同一个应用程序划分成多个stage,这些stage之间是串行执行的，而一个stage里面的多个task是可以并行执行，task数目由partition决定，如果一个partition 的数目特别大，那么导致这个task执行的时间很长，导致接下来的stage无法执行，从而导致整个job执行变慢。
+
+避免数据倾斜，一般要选用合适的key，或者自己定义相关的parttitioner，通过加盐或者哈希值来拆分这些key,从而将这些数据分散到不同的partition去执行。
+
+#### 17. 你用sparksql处理的时候，处理过程中，用的dataframe还是直接写sql？为什么？
+
+#### 18. 现场写一个笔试题
+
+~~~scala
+sc.textfile().flatmap(_.split(",")) //分割成作品，id,用户性别
+.map(((_.1, _.2),1))
+.reduceBykey(_+_)
+.map(_._1._1, _.1._2, _,_2)
+~~~
+
+
+
+#### 19. RDD中reduceBykey与groupBykey 哪一个性能好，为什么？
+
+reuceBykey ：reduceBykey 会在结果发送到reducer之前就会对每个mapper在本地进行merge，有点类似于Mapreduce的combiner.这样做的好处在于，在map端进行一次reduce之后，数据量会大幅的减少，从而减少传输，保证reduce端能够更快的进行结果计算。
+
+groupBykey：groupByKey 会对每一个RDD中的value值聚合形成一个系列interator,此操作发生咋reduce 端，所以势必会将所有的数据通过网络进行传输，造成不必要的浪费。同时如果数据量十分大，可能还会造成outofmemoryError。
+
+所以在进行大量数据的recuce操作建议使用reducebykey,不仅仅可以提高速度，还可以防止使用groupbykey造成的内存溢出问题。
+
+#### 20. Spark masterHA 主从切换会不会影响到集群已有作业的运行为什么？
+
+不会的。
+
+因为程序要运行之前，已经申请过资源了，driver和executor通信，不需要和master进行通信。
+
+#### 21. spark master 使用了zookeeper进行ha,有那些源数据保存到zookeeper里面。
+
+spark通过这个参数：spark.deploy.zoookeeper.dir指定了master元数据在zookeeper中保存的位置，包括worker.driver和application以及executors,standby节点要从zk获取元数据信息，恢复集群的运行状态。才能对外提供服务，作业提交申请资源等等。在恢复之前四不能接收新的请求。
 
 
 
